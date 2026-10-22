@@ -4978,7 +4978,12 @@ async function cargarSamsDesdeSupabase() {
     // cuando el programa no traía el mismo código de estilo que rutas_activas.
     // Esta versión vuelve a cargar toda la tabla necesaria, pero en páginas y solo
     // con las columnas mínimas para mantener el cálculo completo y acelerar la carga.
-    const firma = 'todas-las-rutas-compactas-v2';
+    const { data: infoActualizacion, error: errActualizacion } = await supabaseBalance
+      .from('control_actualizaciones')
+      .select('fecha_actualizacion,registros')
+      .eq('proceso','RUTAS_ACTIVAS')
+      .maybeSingle();
+    const firma = 'rutas-ordenadas-v3-' + (errActualizacion ? String(Date.now()) : (infoActualizacion?.fecha_actualizacion || 'sin-fecha'));
     if (estado.mapaSams && firmaUltimaConsultaSams === firma) {
       wb.sams = 'supabase';
       intentarAutoBalance('rutas-ya-cargadas');
@@ -4990,7 +4995,7 @@ async function cargarSamsDesdeSupabase() {
     if (file) file.textContent = 'Supabase · consulta completa compacta';
     mostrarMensajeUpload('Consultando rutas activas completas desde Supabase...', 'wait');
 
-    const columnas = 'id_ruta,estilo,id_sam,etapa,id_operacion,operacion,secuencia,etapa_operacion,sam';
+    const columnas = 'id,id_ruta,estilo,id_sam,etapa,id_operacion,operacion,secuencia,etapa_operacion,sam';
     const pageSize = 1000;
 
     const { count, error: countError } = await supabaseBalance
@@ -5016,6 +5021,7 @@ async function cargarSamsDesdeSupabase() {
         return supabaseBalance
           .from('rutas_activas')
           .select(columnas)
+          .order('id', { ascending: true })
           .range(from, to);
       }));
 
@@ -5028,9 +5034,15 @@ async function cargarSamsDesdeSupabase() {
       if (file) file.textContent = `Supabase · ${registros.length.toLocaleString('es-GT')} registros`;
     }
 
-    if (!registros.length) {
-      console.warn('Supabase no devolvió rutas activas. Revise tabla rutas_activas o políticas RLS.');
+    // Valida la carga completa: las páginas sin orden estable podían omitir
+    // operaciones de algunos estilos y dejar órdenes sin SAM/HC.
+    const idsRecibidos = new Set(registros.map(r => r.id));
+    if (registros.length !== totalEsperado || idsRecibidos.size !== totalEsperado) {
+      throw new Error('Rutas incompletas o duplicadas: recibidas ' + registros.length +
+        ', IDs únicos ' + idsRecibidos.size + ', esperadas ' + totalEsperado +
+        '. No se calculará HC con una carga parcial; vuelve a intentar la consulta.');
     }
+    idsRecibidos.clear();
 
     estado.mapaSams = procesarSamsDesdeSupabase(registros);
     if (!estado.mapaSams) estado.mapaSams = new Map();
