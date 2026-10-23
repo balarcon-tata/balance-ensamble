@@ -3200,7 +3200,7 @@ body.light-mode tbody tr.tr-sin-ruta-estilo:hover > td{background:rgba(250,204,2
             <p class="upload-card-status pending" id="statusSams">Conectando...</p>
             <p class="upload-card-filename" id="filenameSams">Supabase · rutas_activas</p>
           </div>
-          <span class="btn-upload btn-upload-green" style="cursor:default; opacity:.85;">Automático</span>
+          <button type="button" id="btnActualizarRutas" class="btn-upload btn-upload-green" title="Volver a consultar rutas desde Supabase">↻ Actualizar rutas</button>
         </div>
         <div class="upload-card upload-card-optional" id="uploadCardProyeccion">
           <div class="upload-card-icon icon-indigo">
@@ -4803,6 +4803,7 @@ async function cargarPlanCongeladoDesdeSupabase() {
     if (countError) throw countError;
 
     const totalEsperado = count || 0;
+    if (totalEsperado === 0) throw new Error('Supabase devolvió 0 rutas. Verifique la sesión y los permisos de lectura; no se utilizará un mapa vacío.');
     if (!totalEsperado) {
       wb.programa = null;
       estado.rawPrograma = [];
@@ -4963,7 +4964,7 @@ async function cargarProyeccionDesdeSupabase() {
   }
 }
 
-async function cargarSamsDesdeSupabase() {
+async function cargarSamsDesdeSupabase(forzar = false) {
   if (cargandoSamsSupabase) return;
 
   try {
@@ -4984,7 +4985,7 @@ async function cargarSamsDesdeSupabase() {
       .eq('proceso','RUTAS_ACTIVAS')
       .maybeSingle();
     const firma = 'rutas-ordenadas-v3-' + (errActualizacion ? String(Date.now()) : (infoActualizacion?.fecha_actualizacion || 'sin-fecha'));
-    if (estado.mapaSams && firmaUltimaConsultaSams === firma) {
+    if (!forzar && estado.mapaSams?.size && firmaUltimaConsultaSams === firma) {
       wb.sams = 'supabase';
       intentarAutoBalance('rutas-ya-cargadas');
       return;
@@ -5044,8 +5045,9 @@ async function cargarSamsDesdeSupabase() {
     }
     idsRecibidos.clear();
 
-    estado.mapaSams = procesarSamsDesdeSupabase(registros);
-    if (!estado.mapaSams) estado.mapaSams = new Map();
+    const nuevoMapa = procesarSamsDesdeSupabase(registros);
+    if (!nuevoMapa.size) throw new Error('No se encontraron rutas con SAM válido. Se cancela el cálculo para evitar resultados incorrectos.');
+    estado.mapaSams = nuevoMapa;
 
     firmaUltimaConsultaSams = firma;
     wb.sams = 'supabase';
@@ -7143,6 +7145,15 @@ if (inputProyeccionEl) inputProyeccionEl.addEventListener('change', function () 
     if (st) { st.textContent = 'Archivo cargado'; st.className = 'upload-card-status loaded-ok'; }
     actualizarMensajeCarga();
   });
+});
+
+document.getElementById('btnActualizarRutas')?.addEventListener('click', async () => {
+  if (cargandoSamsSupabase) return;
+  const boton = document.getElementById('btnActualizarRutas');
+  boton.disabled = true;
+  boton.textContent = 'Actualizando...';
+  try { await cargarSamsDesdeSupabase(true); }
+  finally { boton.disabled = false; boton.textContent = '↻ Actualizar rutas'; }
 });
 
 const btnBalancearEl = document.getElementById('btnBalancear');
