@@ -5096,7 +5096,48 @@ function crearRegistroSinRuta(reg, motivo) {
   };
 }
 
+
+/* Agrupar la programación por día/orden sin perder filas válidas del Excel.
+   Ej.: A109583 el 27/10: 286 + 3183 = 3469 unidades. */
+function claveProgramaDiario(reg) {
+  return [
+    String(reg.fecha || '').trim(),
+    normLinea(reg.linea),
+    norm(reg.orden),
+    norm(reg.estiloNorm || reg.estilo),
+    norm(reg.cliente)
+  ].join('||');
+}
+
+function consolidarRegistrosDiarios(registros, fuente) {
+  const agrupados = new Map();
+  let combinados = 0;
+  (registros || []).forEach(reg => {
+    const clave = claveProgramaDiario(reg);
+    if (!agrupados.has(clave)) {
+      agrupados.set(clave, {
+        ...reg,
+        unidades: celdaANumero(reg.unidades),
+        totalPlanificado: celdaANumero(reg.totalPlanificado),
+        cantOrden: celdaANumero(reg.cantOrden)
+      });
+    } else {
+      const existente = agrupados.get(clave);
+      existente.unidades += celdaANumero(reg.unidades);
+      existente.totalPlanificado += celdaANumero(reg.totalPlanificado);
+      // Cantidad de la orden completa es metadato, no se suma por renglón.
+      existente.cantOrden = Math.max(existente.cantOrden, celdaANumero(reg.cantOrden));
+      combinados++;
+    }
+  });
+  if (combinados) {
+    console.info(`${fuente}: ${combinados} fila(s) del mismo día/orden/estilo sumadas sin omitir unidades.`);
+  }
+  return [...agrupados.values()];
+}
+
 function cruzarDatos() {
+  estado.rawPrograma = consolidarRegistrosDiarios(estado.rawPrograma, 'Programa');
   const resultado = [];
   let hitEstilo = 0, hitEf = 0, sinRuta = 0;
 
@@ -5173,7 +5214,7 @@ function cruzarDatos() {
   const unidadesPrograma = (() => {
     const vistas = new Set(); let total = 0;
     estado.rawPrograma.forEach(r => {
-      const k = `${r.fecha}|${r.linea}|${r.orden}|${r.estilo}`;
+      const k = claveProgramaDiario(r);
       if (!vistas.has(k)) { vistas.add(k); total += Number(r.unidades) || 0; }
     });
     return total;
@@ -5181,7 +5222,7 @@ function cruzarDatos() {
   const unidadesResultado = (() => {
     const vistas = new Set(); let total = 0;
     resultado.forEach(r => {
-      const k = `${r.fecha}|${r.linea}|${r.orden}|${r.estilo}`;
+      const k = claveProgramaDiario(r);
       if (!vistas.has(k)) { vistas.add(k); total += Number(r.unidades) || 0; }
     });
     return total;
@@ -5194,6 +5235,7 @@ function cruzarDatos() {
 
 /* ── Cruzar Proyección con los mismos Rutas Supabase ── */
 function cruzarDatosProyeccion() {
+  estadoProyeccion.rawPrograma = consolidarRegistrosDiarios(estadoProyeccion.rawPrograma, 'Proyección');
   const resultado = [];
   estadoProyeccion.rawPrograma.forEach(reg => {
     const estiloKey = estiloKeyCruce(reg.estiloNorm || reg.estilo);
@@ -5273,6 +5315,7 @@ function generarResumen(datosDetalle) {
         fechaISO:   iso,
         nombreDia:  nombreDiaDesdeFecha(r.fecha),
         unidades:   r.unidades,
+        planificado: celdaANumero(r.totalPlanificado),
         hcTotalDia: 0,
         detalleOperaciones: []
       };
@@ -5301,6 +5344,13 @@ function generarResumen(datosDetalle) {
   // Filtrar sábados sin unidades: revisar si todos los grupos tienen hcTotalDia === 0 para ese iso
   // Primero construir el listado completo ordenado
   const fechasOrdenadas = [...setFechas].sort();
+
+  // La columna Total Plan. debe sumar las cantidades programadas de TODOS
+  // los días y filas de una misma orden, no quedarse con la primera fila.
+  mapaGrupos.forEach(grupo => {
+    grupo.totalPlanificado = Object.values(grupo.dias)
+      .reduce((s, dia) => s + (Number(dia.planificado) || 0), 0);
+  });
 
   return {
     filas: [...mapaGrupos.values()],
@@ -5735,7 +5785,7 @@ function renderizarTarjetas() {
   const vistas = new Set();
   let totalUnidades = 0;
   datos.forEach(r => {
-    const k = `${r.fecha}|${r.linea}|${r.orden}|${r.estilo}`;
+    const k = claveProgramaDiario(r);
     if (!vistas.has(k)) { vistas.add(k); totalUnidades += r.unidades; }
   });
 
